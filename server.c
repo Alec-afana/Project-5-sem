@@ -12,6 +12,8 @@
 #include <stdarg.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <stdint.h>
+#include <endian.h>
 
 /* Configuration */
 #define SERVER_ADDR      inet_addr("127.0.0.1"); //INADDR_ANY // inet_addr("192.168.0.1");
@@ -19,10 +21,10 @@
 #define SERVER_MAX_CONN  5
 #define LOG_FILE         "log.txt"
 #define LOG_LEVEL        0
-#define CLIENT_TIMEOUT   10
+#define CLIENT_TIMEOUT   30 //10
 
 /* Example */
-#define BUFFER_LEN       1024
+#define BUFFER_LEN       8192 //1024 
 #define FILE_DIR	"/home/alec/server_files/" //каталог файлов
 
 /* Macros */
@@ -32,6 +34,13 @@
 #define LOG_ERR          3
 
 #define SERVER_GREETING  "Greetings from Server!\n"
+
+//Функция для преобразования 64-битного числа в сетевой порядок (big-endian)
+uint64_t htonll(uint64_t value) {
+    uint32_t high_part = htonl((uint32_t)(value >> 32)); // Старшие 32 бита
+    uint32_t low_part = htonl((uint32_t)(value & 0xFFFFFFFF)); // Младшие 32 бита
+    return ((uint64_t)low_part << 32) | high_part;
+}
 
 void pr_log(int level, const char *format, ...) 
 {
@@ -166,7 +175,7 @@ void *handle_client(void *client_socket)
 		snprintf(filepath, sizeof(filepath), "%s%s", FILE_DIR, filename); //путь к файлу
 		pr_log(LOG_DBG, "Filepath: %s", filepath);//отладка пути
 
-		FILE *file = fopen(filepath, "r");
+		FILE *file = fopen(filepath, "rb");//Открываем файл в двоичном режиме
 		if (!file) {
 			//отправляем сообщение если файл не найден
 			char *error_message = "File not found\n";
@@ -174,9 +183,15 @@ void *handle_client(void *client_socket)
 			perror("File not found");
 		} else {
 			pr_log(LOG_DBG, "Sending file: %s\n", filepath);//отладка отправки файла
+			//отправляем размер файла клиенту
+			struct stat st;
+			stat(filepath, &st);
+			off_t file_size = st.st_size;
+			uint64_t net_file_size = htonll((uint64_t)file_size); // Преобразуем в сетевой порядок
+			send(client_sock, &net_file_size, sizeof(net_file_size), 0); // Отправляем
 			//передаем файл клиенту
-			while (fgets(buffer, BUFFER_LEN, file) != NULL) {
-				send(client_sock, buffer, strlen(buffer), 0);
+			while ((bytes_received = fread(buffer, 1, BUFFER_LEN, file)) > 0) {//(fgets(buffer, BUFFER_LEN, file) != NULL) {
+				send(client_sock, buffer, bytes_received, 0);
 			}
 			fclose(file);
 			pr_log (LOG_MSG, "File sent successfully!!!!!!!!!!");
@@ -184,13 +199,14 @@ void *handle_client(void *client_socket)
 	}
 
 	//ожидание команды завершения
+/*
 	recv(client_sock, buffer, BUFFER_LEN, 0);
 		//а надо ли  здесь \n после quit? yes
 	if (strcmp(buffer, "quit\n") == 0) {
 		pr_log (LOG_MSG, "Client requested to close connection\n");
 		close(client_sock);
 	}
-
+*/
         //send(client_sock, buffer, bytes_received, 0);        
         //pr_log (LOG_MSG, "Respose sent");
 
@@ -248,7 +264,7 @@ int main() {
     }
     fclose (log);
 
-    daemonize();
+    daemonize(); //для отладки
 
     while (server_running) 
     {
